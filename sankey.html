@@ -1,0 +1,543 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Pipeline Flow</title>
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    body {
+      background: #0f1117;
+      color: #e2e8f0;
+      font-family: system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      font-size: 13px;
+      overflow: hidden;
+      width: 100vw;
+      height: 100vh;
+    }
+
+    #loading {
+      position: absolute;
+      inset: 0;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 12px;
+      color: #94a3b8;
+      font-size: 14px;
+    }
+
+    .spinner {
+      width: 28px;
+      height: 28px;
+      border: 2px solid #334155;
+      border-top-color: #6366f1;
+      border-radius: 50%;
+      animation: spin 0.8s linear infinite;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    #error {
+      display: none;
+      position: absolute;
+      inset: 0;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 14px;
+      color: #f87171;
+      font-size: 14px;
+      text-align: center;
+      padding: 40px;
+    }
+
+    #error p { max-width: 480px; line-height: 1.6; color: #cbd5e1; }
+    #error strong { color: #f87171; display: block; margin-bottom: 4px; font-size: 15px; }
+
+    #retry-btn {
+      margin-top: 8px;
+      padding: 8px 20px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      color: #e2e8f0;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    #retry-btn:hover { background: #334155; }
+
+    #setup {
+      display: none;
+      position: absolute;
+      inset: 0;
+      flex-direction: column;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      padding: 40px;
+    }
+
+    #setup h2 { font-size: 16px; color: #e2e8f0; font-weight: 500; }
+    #setup p { color: #94a3b8; max-width: 420px; text-align: center; line-height: 1.6; font-size: 13px; }
+
+    .input-row {
+      display: flex;
+      gap: 8px;
+      width: 100%;
+      max-width: 480px;
+    }
+
+    #key-input {
+      flex: 1;
+      padding: 8px 12px;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 6px;
+      color: #e2e8f0;
+      font-size: 13px;
+      font-family: monospace;
+      outline: none;
+    }
+    #key-input:focus { border-color: #6366f1; }
+    #key-input::placeholder { color: #475569; }
+
+    #key-submit {
+      padding: 8px 16px;
+      background: #6366f1;
+      border: none;
+      border-radius: 6px;
+      color: #fff;
+      font-size: 13px;
+      cursor: pointer;
+      transition: background 0.15s;
+      white-space: nowrap;
+    }
+    #key-submit:hover { background: #4f46e5; }
+
+    #sankey {
+      display: none;
+      width: 100%;
+      height: 100%;
+    }
+
+    .tooltip {
+      position: fixed;
+      background: #1e293b;
+      border: 1px solid #334155;
+      border-radius: 8px;
+      padding: 10px 14px;
+      font-size: 12px;
+      color: #e2e8f0;
+      pointer-events: none;
+      opacity: 0;
+      transition: opacity 0.12s;
+      z-index: 100;
+      max-width: 260px;
+      line-height: 1.7;
+    }
+
+    .tooltip.visible { opacity: 1; }
+
+    .tooltip-title {
+      font-size: 13px;
+      font-weight: 600;
+      color: #f1f5f9;
+      margin-bottom: 4px;
+    }
+
+    .tooltip-row {
+      display: flex;
+      justify-content: space-between;
+      gap: 16px;
+      color: #94a3b8;
+    }
+
+    .tooltip-row span:last-child { color: #e2e8f0; font-weight: 500; }
+  </style>
+</head>
+<body>
+
+  <div id="loading">
+    <div class="spinner"></div>
+    Loading pipeline data…
+  </div>
+
+  <div id="error">
+    <strong id="error-title">Failed to load pipeline data</strong>
+    <p id="error-msg"></p>
+    <button id="retry-btn">Retry</button>
+  </div>
+
+  <div id="setup">
+    <h2>Pipeline Flow Widget</h2>
+    <p>Paste your Twenty API key below to load the diagram.<br>The key is only stored in this browser session and is never sent anywhere except the Twenty API.</p>
+    <div class="input-row">
+      <input id="key-input" type="password" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9…" />
+      <button id="key-submit">Load</button>
+    </div>
+  </div>
+
+  <svg id="sankey"></svg>
+  <div class="tooltip" id="tooltip"></div>
+
+  <script src="https://cdn.jsdelivr.net/npm/d3@7"></script>
+  <script src="https://cdn.jsdelivr.net/npm/d3-sankey@0.12.3/dist/d3-sankey.min.js"></script>
+
+  <script>
+    // ─── Config ───────────────────────────────────────────────────────────────
+    const TWENTY_API_URL = 'https://api.twenty.com/graphql';
+
+    const STAGE_COLOURS = {
+      'Lead':                             '#6366f1',
+      'Cold engaged':                     '#8b5cf6',
+      'Connected':                        '#3b82f6',
+      'Active discovery':                 '#06b6d4',
+      'POC/Trial':                        '#f59e0b',
+      'Won':                              '#22c55e',
+      'OUT - Lost':                       '#ef4444',
+      'OUT - Not interested':             '#f97316',
+      'OUT - Not now, re-engage later':   '#a8a29e',
+      'OUT - Not relevant':               '#78716c',
+    };
+
+    // ─── Key Resolution ───────────────────────────────────────────────────────
+    // Priority: URL hash #apikey=... → session fallback from setup UI
+    function getApiKey() {
+      const params = new URLSearchParams(location.hash.slice(1));
+      return params.get('apikey') || null;
+    }
+
+    // ─── UI State Helpers ─────────────────────────────────────────────────────
+    function showEl(id)  { const el = document.getElementById(id); el.style.display = 'flex'; }
+    function hideEl(id)  { document.getElementById(id).style.display = 'none'; }
+    function showSvg()   { document.getElementById('sankey').style.display = 'block'; }
+
+    function showError(title, msg) {
+      hideEl('loading');
+      hideEl('sankey');
+      document.getElementById('sankey').style.display = 'none';
+      document.getElementById('error-title').textContent = title;
+      document.getElementById('error-msg').textContent = msg;
+      showEl('error');
+    }
+
+    // ─── Data Fetching ─────────────────────────────────────────────────────────
+    const GQL_QUERY = `
+      query GetOpportunities {
+        opportunities(first: 1000) {
+          edges {
+            node {
+              id
+              name
+              stage1  stage1EnteredAt
+              stage2  stage2EnteredAt
+              stage3  stage3EnteredAt
+              stage4  stage4EnteredAt
+              stage5  stage5EnteredAt
+              stage6  stage6EnteredAt
+              stage7  stage7EnteredAt
+              stage8  stage8EnteredAt
+              stage9  stage9EnteredAt
+              stage10 stage10EnteredAt
+            }
+          }
+        }
+      }
+    `;
+
+    async function fetchOpportunities(apiKey) {
+      const res = await fetch(TWENTY_API_URL, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({ query: GQL_QUERY }),
+      });
+
+      if (!res.ok) {
+        throw new Error(`HTTP ${res.status}: ${res.statusText}`);
+      }
+
+      const json = await res.json();
+
+      if (json.errors && json.errors.length) {
+        throw new Error(json.errors.map(e => e.message).join('; '));
+      }
+
+      return json.data.opportunities.edges.map(e => e.node);
+    }
+
+    // ─── Transition Computation ───────────────────────────────────────────────
+    function computeTransitions(opportunities) {
+      const transitions = {};
+
+      for (const opp of opportunities) {
+        const stages = [];
+        for (let i = 1; i <= 10; i++) {
+          const stage = opp[`stage${i}`];
+          if (stage) stages.push(stage);
+        }
+
+        if (stages.length < 2) continue;
+
+        for (let i = 0; i < stages.length - 1; i++) {
+          const from = stages[i];
+          const to   = stages[i + 1];
+          if (from === to) continue;
+          const key = `${from}|||${to}`;
+          transitions[key] = (transitions[key] || 0) + 1;
+        }
+      }
+
+      const allStages = [...new Set(
+        Object.keys(transitions).flatMap(k => k.split('|||'))
+      )];
+
+      const nodes = allStages.map(name => ({ name }));
+      const links = Object.entries(transitions).map(([key, value]) => {
+        const [source, target] = key.split('|||');
+        return {
+          source: allStages.indexOf(source),
+          target: allStages.indexOf(target),
+          value,
+        };
+      });
+
+      return { nodes, links, allStages };
+    }
+
+    // ─── Rendering ────────────────────────────────────────────────────────────
+    const MARGIN = 40;
+
+    function renderSankey({ nodes, links }) {
+      const svg = document.getElementById('sankey');
+      svg.innerHTML = '';
+
+      const W = window.innerWidth;
+      const H = window.innerHeight;
+
+      const svgEl = d3.select('#sankey')
+        .attr('width', W)
+        .attr('height', H);
+
+      const { sankey, sankeyLinkHorizontal } = d3Sankey;
+
+      const sankeyLayout = sankey()
+        .nodeWidth(20)
+        .nodePadding(15)
+        .extent([[MARGIN, MARGIN], [W - MARGIN, H - MARGIN]]);
+
+      const graph = sankeyLayout({
+        nodes: nodes.map(d => Object.assign({}, d)),
+        links: links.map(d => Object.assign({}, d)),
+      });
+
+      // Node total-in counts for tooltips
+      const nodeInFlow  = {};
+      const nodeOutFlow = {};
+      const nodeOutFwd  = {};
+      const nodeOutDrop = {};
+
+      for (const n of graph.nodes) {
+        const totalIn  = n.targetLinks.reduce((s, l) => s + l.value, 0);
+        const totalOut = n.sourceLinks.reduce((s, l) => s + l.value, 0);
+        const fwdOut   = n.sourceLinks
+          .filter(l => !l.target.name.startsWith('OUT'))
+          .reduce((s, l) => s + l.value, 0);
+        const dropOut  = n.sourceLinks
+          .filter(l => l.target.name.startsWith('OUT'))
+          .reduce((s, l) => s + l.value, 0);
+
+        nodeInFlow[n.name]  = totalIn  || n.value || 0;
+        nodeOutFlow[n.name] = totalOut;
+        nodeOutFwd[n.name]  = fwdOut;
+        nodeOutDrop[n.name] = dropOut;
+      }
+
+      // Links
+      svgEl.append('g')
+        .attr('fill', 'none')
+        .selectAll('path')
+        .data(graph.links)
+        .join('path')
+          .attr('d', sankeyLinkHorizontal())
+          .attr('stroke', d => d3.color(STAGE_COLOURS[d.source.name] || '#64748b').copy({ opacity: 0.4 }))
+          .attr('stroke-width', d => Math.max(1, d.width))
+          .attr('stroke-opacity', 0.4)
+          .style('cursor', 'default')
+          .on('mousemove', (event, d) => {
+            const sourceTotal = nodeInFlow[d.source.name] || 1;
+            const pct = Math.round((d.value / sourceTotal) * 100);
+            showTooltip(event, `
+              <div class="tooltip-title">${d.source.name} → ${d.target.name}</div>
+              <div class="tooltip-row"><span>Deals</span><span>${d.value}</span></div>
+              <div class="tooltip-row"><span>% of ${d.source.name}</span><span>${pct}%</span></div>
+            `);
+            d3.select(event.currentTarget).attr('stroke-opacity', 0.7);
+          })
+          .on('mouseleave', (event) => {
+            hideTooltip();
+            d3.select(event.currentTarget).attr('stroke-opacity', 0.4);
+          });
+
+      // Nodes
+      const nodeG = svgEl.append('g')
+        .selectAll('g')
+        .data(graph.nodes)
+        .join('g');
+
+      nodeG.append('rect')
+        .attr('x', d => d.x0)
+        .attr('y', d => d.y0)
+        .attr('width',  d => d.x1 - d.x0)
+        .attr('height', d => Math.max(1, d.y1 - d.y0))
+        .attr('fill',   d => STAGE_COLOURS[d.name] || '#64748b')
+        .attr('rx', 3)
+        .style('cursor', 'default')
+        .on('mousemove', (event, d) => {
+          const totalIn   = nodeInFlow[d.name];
+          const stillHere = totalIn - nodeOutFlow[d.name];
+          const fwdOut    = nodeOutFwd[d.name];
+          const dropOut   = nodeOutDrop[d.name];
+          showTooltip(event, `
+            <div class="tooltip-title">${d.name}</div>
+            <div class="tooltip-row"><span>Total entered</span><span>${totalIn}</span></div>
+            <div class="tooltip-row"><span>Still here</span><span>${Math.max(0, stillHere)}</span></div>
+            <div class="tooltip-row"><span>Converted forward</span><span>${fwdOut}</span></div>
+            <div class="tooltip-row"><span>Dropped out</span><span>${dropOut}</span></div>
+          `);
+        })
+        .on('mouseleave', hideTooltip);
+
+      // Labels
+      nodeG.append('text')
+        .attr('x', d => d.x1 + 7)
+        .attr('y', d => (d.y0 + d.y1) / 2)
+        .attr('dy', '0.35em')
+        .attr('text-anchor', 'start')
+        .attr('fill', '#cbd5e1')
+        .attr('font-size', 12)
+        .text(d => {
+          const total = nodeInFlow[d.name];
+          return `${d.name} (${total})`;
+        })
+        .each(function(d) {
+          // Flip label to left side if too close to right edge
+          const textWidth = this.getBBox().width;
+          if (d.x1 + 7 + textWidth > W - 4) {
+            d3.select(this)
+              .attr('x', d.x0 - 7)
+              .attr('text-anchor', 'end');
+          }
+        });
+    }
+
+    // ─── Tooltip ──────────────────────────────────────────────────────────────
+    const tooltipEl = document.getElementById('tooltip');
+
+    function showTooltip(event, html) {
+      tooltipEl.innerHTML = html;
+      tooltipEl.classList.add('visible');
+      moveTooltip(event);
+    }
+
+    function moveTooltip(event) {
+      const pad = 14;
+      const tw  = tooltipEl.offsetWidth;
+      const th  = tooltipEl.offsetHeight;
+      let x = event.clientX + pad;
+      let y = event.clientY + pad;
+      if (x + tw > window.innerWidth  - pad) x = event.clientX - tw - pad;
+      if (y + th > window.innerHeight - pad) y = event.clientY - th - pad;
+      tooltipEl.style.left = x + 'px';
+      tooltipEl.style.top  = y + 'px';
+    }
+
+    document.addEventListener('mousemove', e => {
+      if (tooltipEl.classList.contains('visible')) moveTooltip(e);
+    });
+
+    function hideTooltip() {
+      tooltipEl.classList.remove('visible');
+    }
+
+    // ─── Main Flow ────────────────────────────────────────────────────────────
+    async function init(apiKey) {
+      hideEl('setup');
+      hideEl('error');
+      showEl('loading');
+
+      let opportunities;
+      try {
+        opportunities = await fetchOpportunities(apiKey);
+      } catch (err) {
+        showError('Failed to load pipeline data', err.message || String(err));
+        return;
+      }
+
+      if (!opportunities || opportunities.length === 0) {
+        showError('No pipeline data found', 'The API returned no opportunities. Check that the API key has access to the Opportunity object.');
+        return;
+      }
+
+      const { nodes, links } = computeTransitions(opportunities);
+
+      if (nodes.length === 0 || links.length === 0) {
+        showError('No stage transitions found', 'Opportunities were returned but none had at least two different stages recorded. Nothing to display.');
+        return;
+      }
+
+      _lastSankeyData = { nodes, links };
+      hideEl('loading');
+      showSvg();
+      renderSankey({ nodes, links });
+    }
+
+    // ─── Setup UI ─────────────────────────────────────────────────────────────
+    document.getElementById('key-submit').addEventListener('click', () => {
+      const key = document.getElementById('key-input').value.trim();
+      if (!key) return;
+      init(key);
+    });
+
+    document.getElementById('key-input').addEventListener('keydown', e => {
+      if (e.key === 'Enter') document.getElementById('key-submit').click();
+    });
+
+    document.getElementById('retry-btn').addEventListener('click', () => {
+      const apiKey = getApiKey();
+      if (apiKey) {
+        init(apiKey);
+      } else {
+        hideEl('error');
+        showEl('setup');
+      }
+    });
+
+    // ─── Resize ───────────────────────────────────────────────────────────────
+    let _lastSankeyData = null;
+
+    window.addEventListener('resize', () => {
+      if (document.getElementById('sankey').style.display === 'block' && _lastSankeyData) {
+        renderSankey(_lastSankeyData);
+      }
+    });
+
+    // ─── Boot ─────────────────────────────────────────────────────────────────
+    (function boot() {
+      const apiKey = getApiKey();
+      if (apiKey) {
+        init(apiKey);
+      } else {
+        hideEl('loading');
+        showEl('setup');
+      }
+    })();
+  </script>
+</body>
+</html>
