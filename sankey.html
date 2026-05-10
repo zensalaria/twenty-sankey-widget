@@ -191,6 +191,20 @@
     // ─── Config ───────────────────────────────────────────────────────────────
     const TWENTY_API_URL = 'https://api.twenty.com/graphql';
 
+    // Twenty stores Select values as internal enum codes. Map them to display labels.
+    const VALUE_TO_LABEL = {
+      'LEAD':              'Lead',
+      'COLD_ENGAGED':      'Cold engaged',
+      'CONNECTED':         'Connected',
+      'ACTIVE_DISCOVERY':  'Active discovery',
+      'POC_TRIAL':         'POC/Trial',
+      'WON':               'Won',
+      'OUT_LOST':          'OUT - Lost',
+      'OUT_NOT_RELEVANT':  'OUT - Not relevant',
+      'OUT_NOT_INTERESTED':'OUT - Not interested',
+      'OUT_NOT_NOW':       'OUT - Not now, re-engage later',
+    };
+
     const STAGE_COLOURS = {
       'Lead':                             '#6366f1',
       'Cold engaged':                     '#8b5cf6',
@@ -287,8 +301,10 @@
       for (const opp of opportunities) {
         const stages = [];
         for (let i = 1; i <= 10; i++) {
-          const stage = opp[`stage${i}`];
-          if (stage) stages.push(stage);
+          const raw = opp[`stage${i}`];
+          if (!raw) continue;
+          const label = VALUE_TO_LABEL[raw] || raw; // fall back to raw if unknown
+          stages.push(label);
         }
 
         if (stages.length < 2) continue;
