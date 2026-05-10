@@ -273,6 +273,14 @@
     }
 
     // ─── Transition Computation ───────────────────────────────────────────────
+    // Canonical order defines "forward" direction. Any transition that goes
+    // backward (to an earlier index) is skipped to prevent d3-sankey cycles.
+    const STAGE_ORDER = [
+      'Lead', 'Cold engaged', 'Connected', 'Active discovery', 'POC/Trial',
+      'Won', 'OUT - Lost', 'OUT - Not interested',
+      'OUT - Not now, re-engage later', 'OUT - Not relevant',
+    ];
+
     function computeTransitions(opportunities) {
       const transitions = {};
 
@@ -289,6 +297,12 @@
           const from = stages[i];
           const to   = stages[i + 1];
           if (from === to) continue;
+
+          // Skip backward transitions — they cause cycles in the Sankey graph
+          const fromIdx = STAGE_ORDER.indexOf(from);
+          const toIdx   = STAGE_ORDER.indexOf(to);
+          if (fromIdx !== -1 && toIdx !== -1 && toIdx <= fromIdx) continue;
+
           const key = `${from}|||${to}`;
           transitions[key] = (transitions[key] || 0) + 1;
         }
