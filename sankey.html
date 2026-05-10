@@ -298,10 +298,11 @@
           const to   = stages[i + 1];
           if (from === to) continue;
 
-          // Skip backward transitions — they cause cycles in the Sankey graph
+          // Skip if either stage is unknown, or if the transition goes backward.
+          // Both conditions cause cycles in d3-sankey's DAG layout.
           const fromIdx = STAGE_ORDER.indexOf(from);
           const toIdx   = STAGE_ORDER.indexOf(to);
-          if (fromIdx !== -1 && toIdx !== -1 && toIdx <= fromIdx) continue;
+          if (fromIdx === -1 || toIdx === -1 || toIdx <= fromIdx) continue;
 
           const key = `${from}|||${to}`;
           transitions[key] = (transitions[key] || 0) + 1;
@@ -509,7 +510,11 @@
       _lastSankeyData = { nodes, links };
       hideEl('loading');
       showSvg();
-      renderSankey({ nodes, links });
+      try {
+        renderSankey({ nodes, links });
+      } catch (err) {
+        showError('Render error', err.message || String(err));
+      }
     }
 
     // ─── Setup UI ─────────────────────────────────────────────────────────────
@@ -538,7 +543,7 @@
 
     window.addEventListener('resize', () => {
       if (document.getElementById('sankey').style.display === 'block' && _lastSankeyData) {
-        renderSankey(_lastSankeyData);
+        try { renderSankey(_lastSankeyData); } catch (_) {}
       }
     });
 
